@@ -3,7 +3,7 @@ from tts.tts import TextToSpeech
 
 
 class PiperTTS(TextToSpeech):
-    def __init__(self, model_path, config_path, use_cuda=True):
+    def __init__(self, model_path, config_path, use_cuda=False):
         self.voice = PiperVoice.load(model_path, config_path, use_cuda)
 
     def say(self, text, **kwargs):

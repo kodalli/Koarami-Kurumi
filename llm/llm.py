@@ -1,5 +1,6 @@
 # Language Model
 from abc import ABC, abstractmethod
+from typing import Iterable
 import torch
 
 class LanguageModel(ABC):
@@ -7,7 +8,7 @@ class LanguageModel(ABC):
         self.device = "gpu" if torch.cuda.is_available() else "cpu"
 
     @abstractmethod
-    def run(self, prompt, max_new_tokens):
+    def think(self, prompt, max_new_tokens) -> str:
         """
         Takes in a text prompt and returns a complete text response
         :param prompt: String text prompt
@@ -17,7 +18,7 @@ class LanguageModel(ABC):
         pass
     
     @abstractmethod
-    def generate(self, prompt, max_new_tokens):
+    def generate(self, prompt) -> Iterable[str]:
         """
         Takes in a text prompt and returns a generator to stream out the text response 
         :param prompt: String text prompt

@@ -1,0 +1,143 @@
+import speech_recognition as sr
+from datetime import datetime, timedelta
+from queue import Queue
+from time import sleep
+from sys import platform
+import tkinter as tk
+from tkinter import simpledialog, messagebox
+import threading
+import websocket
+import pyaudio
+import json
+
+
+def listener():
+    # The last time a recording was retrieved from the queue.
+    phrase_time = None
+    # Thread safe Queue for passing data from the threaded recording callback.
+    data_queue = Queue()
+    # We use SpeechRecognizer to record our audio because it has a nice feature where it can detect when speech ends.
+    recorder = sr.Recognizer()
+    recorder.energy_threshold = 1000
+    # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
+    recorder.dynamic_energy_threshold = False
+
+    # Important for linux users.
+    # Prevents permanent application hang and crash by using the wrong Microphone
+    if 'linux' in platform:
+        mic_name = "pulse"
+        if not mic_name or mic_name == 'list':
+            print("Available microphone devices are: ")
+            for index, name in enumerate(sr.Microphone.list_microphone_names()):
+                print(f"Microphone with name \"{name}\" found")
+            return
+        else:
+            for index, name in enumerate(sr.Microphone.list_microphone_names()):
+                if mic_name in name:
+                    source = sr.Microphone(sample_rate=16000, device_index=index)
+                    break
+    else:
+        source = sr.Microphone(sample_rate=16000)
+
+
+    record_timeout = 2
+    phrase_timeout = 3
+
+    with source:
+        recorder.adjust_for_ambient_noise(source)
+
+    def record_callback(_, audio: sr.AudioData) -> None:
+        """
+        Threaded callback function to receive audio data when recordings finish.
+        audio: An AudioData containing the recorded bytes.
+        """
+        # Grab the raw bytes and push it into the thread safe queue.
+        data = audio.get_raw_data()
+        data_queue.put(data)
+
+    # Create a background thread that will pass us raw audio bytes.
+    recorder.listen_in_background(source, record_callback, phrase_time_limit=record_timeout)
+
+    # Cue the user that we're ready to go.
+    print("Listening...\n")
+
+    while True:
+        try:
+            now = datetime.utcnow()
+            # Pull raw recorded audio from the queue.
+            if not data_queue.empty():
+                phrase_complete = False
+                # If enough time has passed between recordings, consider the phrase complete.
+                # Clear the current working audio buffer to start over with the new data.
+                if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
+                    phrase_complete = True
+                # This is the last time we received new audio data from the queue.
+                phrase_time = now
+
+                if phrase_complete:
+                    # Combine audio data from queue
+                    audio_data = b''.join(data_queue.queue)
+                    data_queue.queue.clear()
+                    # TODO: Send the audio data to the SpeechRecognizer to be transcribed.
+
+                # Infinite loops are bad for processors, must sleep.
+                sleep(0.25)
+        except KeyboardInterrupt:
+            break
+
+
+class GUI:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Text to Speech and Speech Recognition")
+
+        self.listen_button = tk.Button(self.root, text="Recognize Speech", command=self.start_listening)
+        self.listen_button.pack(pady=10)
+
+        self.audio_stream = None
+        self.ws = websocket.create_connection("ws://localhost:8765")
+
+    def start_listening(self):
+        threading.Thread(target=self.record_and_send, daemon=True).start()
+
+    def receive_and_play(self):
+        p = pyaudio.PyAudio()
+        stream = p.open(format=pyaudio.paInt16, channels=1, rate=22050, output=True)  # Replace 22050 with your TTS sample rate
+
+        while True:
+            audio_chunk = self.ws.recv()
+            if audio_chunk:
+                stream.write(audio_chunk)
+
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
+    def record_and_send(self):
+        p = pyaudio.PyAudio()
+        stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)  # Replace 16000 with your STT sample rate
+
+        print("Recording...")
+        audio_frames = []
+        for _ in range(0, int(16000 / 1024 * 5)):  # Record for 5 seconds
+            data = stream.read(1024)
+            audio_frames.append(data)
+
+        print("Finished recording.")
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
+        audio_data = b''.join(audio_frames)
+        self.ws.send_binary(audio_data)
+        response = self.ws.recv()
+        if response:
+            transcription = json.loads(response).get('transcription')
+            messagebox.showinfo("Transcription", transcription)
+
+    def run(self):
+        self.root.mainloop()
+
+if __name__ == "__main__":
+    app = GUI()
+    app.run()
