@@ -8,7 +8,7 @@ class LanguageModel(ABC):
         self.device = "gpu" if torch.cuda.is_available() else "cpu"
 
     @abstractmethod
-    def think(self, prompt) -> str:
+    def think(self, prompt, **kwargs) -> str:
         """
         Takes in a text prompt and returns a complete text response
         :param prompt: String text prompt
@@ -18,7 +18,7 @@ class LanguageModel(ABC):
         pass
     
     @abstractmethod
-    def generate(self, prompt) -> Iterable[str]:
+    def generate(self, prompt, **kwargs) -> Iterable[str]:
         """
         Takes in a text prompt and returns a generator to stream out the text response 
         :param prompt: String text prompt
