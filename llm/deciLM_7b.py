@@ -28,9 +28,9 @@ class DeciLM7b(LanguageModel):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model = AutoModelForCausalLM.from_pretrained(self.model_name, trust_remote_code=True, **dtype_kwargs)
-        self.generator = pipeline("text-generation", model=self.model, tokenizer=self.tokenizer, temperature=0.7, top_p=0.95, max_length=4096, do_sample=True, return_full_text=False)
 
-    def think(self, prompt):
+    def think(self, prompt, max_new_tokens=4096, temperature=0.7, top_p=0.95, **kwargs):
+        self.generator = pipeline("text-generation", model=self.model, tokenizer=self.tokenizer, temperature=temperature, top_p=top_p, max_length=max_new_tokens, do_sample=True, return_full_text=False)
         system_prompt = "You are an AI assistant that follows instruction extremely well. Help as much as you can."
 
         prompt = self.tokenizer.apply_chat_template([
@@ -41,7 +41,7 @@ class DeciLM7b(LanguageModel):
         response = self.generator(prompt)[0]["generated_text"]
         return response
     
-    def generate(self, prompt):
+    def generate(self, prompt, **kwargs):
         pass
     
 if __name__ == "__main__":
