@@ -40,11 +40,6 @@ class DeciLM7b(LanguageModel):
 
         response = self.generator(prompt)[0]["generated_text"]
         return response
-
-        # inputs = torch.tensor(self.tokenizer.encode(prompt))
-        # outputs = self.model.generate(inputs, max_new_tokens=max_new_tokens, do_sample=True, top_p=0.95,
-        #                               temperature=0.7)
-        # return self.tokenizer.decode(outputs[0])
     
     def generate(self, prompt):
         pass
