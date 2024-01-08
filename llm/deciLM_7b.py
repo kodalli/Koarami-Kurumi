@@ -51,6 +51,7 @@ class DeciLM7b(LanguageModel):
     
 if __name__ == "__main__":
     deciLM = DeciLM7b(quantize=True) 
-    response = deciLM.think(prompt="Yeehaw!")
+    text = "Yeehaw"
+    response = deciLM.think(prompt=text)
     print(response)
     
