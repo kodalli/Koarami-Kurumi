@@ -40,7 +40,7 @@ class WebSocketServer:
                     llm_response = self.llm_engine.think(transcribed_text, max_new_tokens=4096)
                     print("Response text: " + llm_response)
 
-                    audio_generator = self.tts_engine.say(text=llm_response, sentence_silence=0.1, length_scale=1.2, noise_scale=0.3)
+                    audio_generator = self.tts_engine.say(llm_response)
 
                     for audio_chunk in audio_generator:
                         await websocket.send(audio_chunk)
