@@ -29,7 +29,6 @@ def resample_wav(streamer_folder, name):
             sound = AudioSegment.from_wav(os.path.join(wav_source_folder, file))
             sound = sound.set_channels(1)
             sound = sound.set_frame_rate(8000)
-            file_name = os.path.basename(file).split("/")[-1]
             sound.export(
                 os.path.join(resampled_audio_folder, f"{name}_{count}.wav"),
                 format="wav",
@@ -41,7 +40,7 @@ def clip_audio(audio_file, output_file, start_time, end_time):
     clip = sound[start_time:end_time]
     clip.export(output_file, format="wav")
 
-def create_clip_metadata(resampled_audio_folder, clip_folder, batch_length_sec=100):
+def batch_clips(resampled_audio_folder, clip_folder, batch_length_sec=100):
     files = [file for file in os.listdir(resampled_audio_folder) if file.endswith(".wav")]
     files.sort(key=lambda x: int(x.split("_")[1].split(".")[0]))
 
@@ -158,5 +157,5 @@ if __name__ == "__main__":
     # clip_audio("data/Toma/resampled_audio/resampled-3.0 TOMA DEBUT 💛 BIRTHDAY SUBATHON 💛 (4).wav", "data/XL/resampled_audio/toma_debut_4_clip_0s_1000s.wav", 0, 100 * 1000)
     # isolate_voice("data/XL/")
     # transcribe_voice("data/XL/")
-    create_clip_metadata("data/Toma/resampled_audio/", "data/Toma/clips/")
+    batch_clips("data/Toma/resampled_audio/", "data/Toma/clips/")
     pass
