@@ -18,22 +18,60 @@ def convert_mp4_to_wav(mp4_file_folder):
             clip.audio.write_audiofile(wav_file)
 
 
-def resample_wav(streamer_folder):
+def resample_wav(streamer_folder, name):
     streamer_folder = os.path.dirname(streamer_folder)
     wav_source_folder = os.path.join(streamer_folder, "audio/")
     resampled_audio_folder = os.path.join(streamer_folder, "resampled_audio/")
     os.makedirs(resampled_audio_folder, exist_ok=True)
+    count = 0
     for file in os.listdir(wav_source_folder):
         if file.endswith(".wav"):
-            file_name = os.path.basename(file).split("/")[-1]
             sound = AudioSegment.from_wav(os.path.join(wav_source_folder, file))
             sound = sound.set_channels(1)
             sound = sound.set_frame_rate(8000)
+            file_name = os.path.basename(file).split("/")[-1]
             sound.export(
-                os.path.join(resampled_audio_folder, "resampled-" + file_name),
+                os.path.join(resampled_audio_folder, f"{name}_{count}.wav"),
                 format="wav",
             )
+            count += 1
 
+def clip_audio(audio_file, output_file, start_time, end_time):
+    sound = AudioSegment.from_wav(audio_file)
+    clip = sound[start_time:end_time]
+    clip.export(output_file, format="wav")
+
+def create_clip_metadata(resampled_audio_folder, clip_folder, batch_length_sec=100):
+    files = [file for file in os.listdir(resampled_audio_folder) if file.endswith(".wav")]
+    files.sort(key=lambda x: int(x.split("_")[1].split(".")[0]))
+
+    start_time = 0
+    counter = 0
+    batch_length_ms = batch_length_sec * 1000
+    data = []  
+    os.makedirs(clip_folder, exist_ok=True)
+
+    total_length = 0
+
+    for file in files:
+        sound = AudioSegment.from_wav(os.path.join(resampled_audio_folder, file))
+        length_ms = len(sound)
+        total_length += length_ms
+        for i in range(0, length_ms, batch_length_ms):
+            start = i
+            end = i + batch_length_ms
+            batch = sound[start:end]
+            batch_file_name = os.path.join(clip_folder, f"{counter}.wav")
+            batch.export(batch_file_name, format="wav")
+            batch_data = {"file_name": batch_file_name, "start": start + start_time, "end": len(batch) + start_time}
+            data.append(batch_data) 
+            counter += 1
+            start_time += len(batch)
+
+    print(f"Total length: {total_length / 1000} seconds")
+    print(f"start_time: {start_time / 1000} seconds")
+    df = pd.DataFrame(data, columns=["file_name", "start", "end"])
+    df.to_csv(os.path.join(clip_folder, "metadata.csv"), index=False)
 
 def isolate_voice(streamer_folder):
     model = separator.from_hparams(
@@ -115,5 +153,10 @@ def prepare_audio(folder):
     transcribe_voice(folder)
 
 if __name__ == "__main__":
-    prepare_audio("data/XL/")
+    # prepare_audio("data/XL/")
+    # isolate_voice("data/Toma/")
+    # clip_audio("data/Toma/resampled_audio/resampled-3.0 TOMA DEBUT 💛 BIRTHDAY SUBATHON 💛 (4).wav", "data/XL/resampled_audio/toma_debut_4_clip_0s_1000s.wav", 0, 100 * 1000)
+    # isolate_voice("data/XL/")
+    # transcribe_voice("data/XL/")
+    create_clip_metadata("data/Toma/resampled_audio/", "data/Toma/clips/")
     pass
