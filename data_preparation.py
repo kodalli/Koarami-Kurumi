@@ -8,6 +8,15 @@ from stt.whisper_stt import WhisperSTT
 
 
 def convert_mp4_to_wav(mp4_file_folder):
+    """
+    Convert MP4 files to WAV format.
+
+    Args:
+        mp4_file_folder (str): The path to the folder containing the MP4 files.
+
+    Returns:
+        None
+    """
     wav_file_folder = os.path.join(os.path.dirname(mp4_file_folder), "audio/")
     os.makedirs(wav_file_folder, exist_ok=True)
     for file in os.listdir(mp4_file_folder):
@@ -19,6 +28,13 @@ def convert_mp4_to_wav(mp4_file_folder):
 
 
 def resample_wav(streamer_folder, name):
+    """
+    Resamples the WAV files in the specified streamer folder to a single channel and a sample rate of 8000 Hz.
+    
+    Args:
+        streamer_folder (str): The path to the streamer folder.
+        name (str): The name to be appended to the resampled audio files.
+    """
     streamer_folder = os.path.dirname(streamer_folder)
     wav_source_folder = os.path.join(streamer_folder, "audio/")
     resampled_audio_folder = os.path.join(streamer_folder, "resampled_audio/")
@@ -36,13 +52,38 @@ def resample_wav(streamer_folder, name):
             count += 1
 
 def clip_audio(audio_file, output_file, start_time, end_time):
+    """
+    Clips a portion of an audio file and exports it to a new file.
+
+    Parameters:
+    audio_file (str): The path to the input audio file.
+    output_file (str): The path to the output audio file.
+    start_time (int): The start time of the clip in milliseconds.
+    end_time (int): The end time of the clip in milliseconds.
+    """
     sound = AudioSegment.from_wav(audio_file)
     clip = sound[start_time:end_time]
     clip.export(output_file, format="wav")
 
 def batch_clips(resampled_audio_folder, clip_folder, batch_length_sec=100):
+    """
+    Batch clips from resampled audio files and export them as individual WAV files.
+    Filenames must have a "_#.wav" suffix where # is the clip number.
+    
+    Args:
+        resampled_audio_folder (str): Path to the folder containing the resampled audio files.
+        clip_folder (str): Path to the folder where the batch clips will be saved.
+        batch_length_sec (int, optional): Length of each batch clip in seconds. Defaults to 100.
+    
+    Returns:
+        None
+    
+    Raises:
+        None
+    """
     files = [file for file in os.listdir(resampled_audio_folder) if file.endswith(".wav")]
     files.sort(key=lambda x: int(x.split("_")[1].split(".")[0]))
+    print(files)
 
     start_time = 0
     counter = 0
@@ -73,6 +114,15 @@ def batch_clips(resampled_audio_folder, clip_folder, batch_length_sec=100):
     df.to_csv(os.path.join(clip_folder, "metadata.csv"), index=False)
 
 def isolate_voice(streamer_folder):
+    """
+    Function to isolate the voice from an audio stream using a pre-trained model.
+
+    Args:
+        streamer_folder (str): The path to the folder containing the streamers audio data.
+
+    Returns:
+        None
+    """
     model = separator.from_hparams(
         source="speechbrain/sepformer-wsj02mix",
         savedir="data/pretrained_models/sepformer-wsj02mix",
@@ -99,6 +149,17 @@ def isolate_voice(streamer_folder):
 
 
 def detect_silence_and_split(filename, min_silence_len=1000, silence_thresh=-40):
+    """
+    Detects silence in an audio file and splits it into non-silent chunks.
+
+    Args:
+        filename (str): The path to the audio file.
+        min_silence_len (int, optional): The minimum duration of silence in milliseconds to be considered as non-silent. Defaults to 1000.
+        silence_thresh (float, optional): The threshold in dBFS below which the audio is considered as silence. Defaults to -40.
+
+    Returns:
+        tuple: A tuple containing the non-silent chunks and the original audio segment.
+    """
     audio_segment = AudioSegment.from_file(filename)
     non_silent_chunks = silence.detect_nonsilent(
         audio_segment, min_silence_len, silence_thresh
@@ -107,6 +168,17 @@ def detect_silence_and_split(filename, min_silence_len=1000, silence_thresh=-40)
 
 
 def process_chunks(non_silent_chunks, audio_segment, model):
+    """
+    Process non-silent audio chunks and transcribe them using a given model.
+
+    Args:
+        non_silent_chunks (list): List of tuples representing the start and end times of non-silent audio chunks.
+        audio_segment (AudioSegment): Audio segment containing the entire audio.
+        model (Model): Model used for transcription.
+
+    Returns:
+        list: List of dictionaries containing the start time, end time, and transcribed text for each chunk.
+    """
     results = []
     for start_ms, end_ms in non_silent_chunks:
         chunk = audio_segment[start_ms:end_ms]
@@ -122,10 +194,15 @@ def save_to_csv(results, filename):
 
 
 def transcribe_voice(streamer_folder):
-    # Collect parts of audio that are not silent
-    # Timestamps of each part
-    # Transcribe each part
-    # Output csv start_time, end_time, text
+    """
+    Transcribes the voice from audio files in the specified streamer folder.
+
+    Args:
+        streamer_folder (str): The path to the streamer folder.
+
+    Returns:
+        None
+    """
     model = WhisperSTT()
     streamer_folder = os.path.dirname(streamer_folder)
     wav_source_folder = os.path.join(streamer_folder, "separated_audio/")
