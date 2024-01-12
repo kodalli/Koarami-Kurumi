@@ -1,6 +1,6 @@
 import time
-from llm.deciLM_7b import DeciLM7b
-from llm.llm import LanguageModel
+from llm.inference.deciLM_7b import DeciLM7b
+from llm.inference.llm import LanguageModel
 from stt.stt import SpeechToText
 from stt.whisper_stt import WhisperSTT
 from tts.piper_tts import PiperTTS

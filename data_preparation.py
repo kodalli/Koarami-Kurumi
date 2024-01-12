@@ -5,6 +5,7 @@ import torchaudio
 from pydub import AudioSegment, silence
 import pandas as pd
 from stt.whisper_stt import WhisperSTT 
+import tqdm
 
 
 def convert_mp4_to_wav(mp4_file_folder):
@@ -96,22 +97,25 @@ def batch_clips(resampled_audio_folder, clip_folder, batch_length_sec=100):
     for file in files:
         sound = AudioSegment.from_wav(os.path.join(resampled_audio_folder, file))
         length_ms = len(sound)
+        print(f"length: {length_ms}")
         total_length += length_ms
         for i in range(0, length_ms, batch_length_ms):
             start = i
             end = i + batch_length_ms
+            # print(f"start: {start}, end: {end}")
             batch = sound[start:end]
             batch_file_name = os.path.join(clip_folder, f"{counter}.wav")
             batch.export(batch_file_name, format="wav")
-            batch_data = {"file_name": batch_file_name, "start": start + start_time, "end": len(batch) + start_time}
+            batch_data = {"file_name": batch_file_name, "start": start_time, "end": start_time + len(batch)}
             data.append(batch_data) 
             counter += 1
             start_time += len(batch)
+            print(f"batch length: {len(batch)}")
 
     print(f"Total length: {total_length / 1000} seconds")
     print(f"start_time: {start_time / 1000} seconds")
     df = pd.DataFrame(data, columns=["file_name", "start", "end"])
-    df.to_csv(os.path.join(clip_folder, "metadata.csv"), index=False)
+    df.to_csv(os.path.join(clip_folder, "clip_timestamps.csv"), index=False)
 
 def isolate_voice(streamer_folder):
     """
@@ -193,25 +197,13 @@ def save_to_csv(results, filename):
     df.to_csv(filename, index=False)
 
 
-def transcribe_voice(streamer_folder):
-    """
-    Transcribes the voice from audio files in the specified streamer folder.
-
-    Args:
-        streamer_folder (str): The path to the streamer folder.
-
-    Returns:
-        None
-    """
+def transcribe_voice(audio_clips_folder, transcription_folder):
     model = WhisperSTT()
-    streamer_folder = os.path.dirname(streamer_folder)
-    wav_source_folder = os.path.join(streamer_folder, "separated_audio/")
-    transcription_folder = os.path.join(streamer_folder, "transcription/")
     os.makedirs(transcription_folder, exist_ok=True)
-    for file in os.listdir(wav_source_folder):
-        if file.endswith(".wav") and file.startswith("2-"):
+    for file in tqdm(os.listdir(audio_clips_folder), desc="Transcribing"):
+        if file.endswith(".wav"): # and file.startswith("2-"):
             file_name = os.path.basename(file).split("/")[-1]
-            source_audio_file = os.path.join(wav_source_folder, file)
+            source_audio_file = os.path.join(audio_clips_folder, file)
             non_silent_chunks, audio_segment = detect_silence_and_split(
                 source_audio_file
             )
@@ -221,18 +213,11 @@ def transcribe_voice(streamer_folder):
                 os.path.join(transcription_folder, file_name.replace(".wav", ".csv")),
             )
 
-
-def prepare_audio(folder):
-    convert_mp4_to_wav(folder)
-    resample_wav(folder)
-    isolate_voice(folder)
-    transcribe_voice(folder)
-
 if __name__ == "__main__":
     # prepare_audio("data/XL/")
     # isolate_voice("data/Toma/")
-    # clip_audio("data/Toma/resampled_audio/resampled-3.0 TOMA DEBUT 💛 BIRTHDAY SUBATHON 💛 (4).wav", "data/XL/resampled_audio/toma_debut_4_clip_0s_1000s.wav", 0, 100 * 1000)
     # isolate_voice("data/XL/")
     # transcribe_voice("data/XL/")
-    batch_clips("data/Toma/resampled_audio/", "data/Toma/clips/")
+    # batch_clips("data/Toma/resampled_audio/", "data/Toma/clips/")
+    transcribe_voice("data/Toma/clips/", "data/Toma/transcriptions/")
     pass
