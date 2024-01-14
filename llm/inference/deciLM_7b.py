@@ -40,6 +40,10 @@ class DeciLM7b(LanguageModel):
             self.model_name, trust_remote_code=True, **dtype_kwargs
         )
 
+    @staticmethod
+    def get_tokenizer():
+        return AutoTokenizer.from_pretrained("Deci/DeciLM-7B-instruct")
+
     def __prompt(self, prompt, history=""):
         system_prompt = (
             "### System:\n "

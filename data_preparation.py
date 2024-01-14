@@ -1,11 +1,13 @@
+import json
 from moviepy.editor import VideoFileClip
 import os
 from speechbrain.pretrained import SepformerSeparation as separator
 import torchaudio
 from pydub import AudioSegment, silence
 import pandas as pd
+from llm.inference.deciLM_7b import DeciLM7b
 from stt.whisper_stt import WhisperSTT 
-import tqdm
+from tqdm import tqdm
 
 
 def convert_mp4_to_wav(mp4_file_folder):
@@ -213,11 +215,109 @@ def transcribe_voice(audio_clips_folder, transcription_folder):
                 os.path.join(transcription_folder, file_name.replace(".wav", ".csv")),
             )
 
+def combine_transcriptions_csv(transcription_folder, clips_folder):
+    files = [file for file in os.listdir(transcription_folder) if file.endswith(".csv") and file != "full_transcription.csv"]
+    files.sort(key=lambda x: int(x.split(".")[0]))
+    df_combined = pd.DataFrame(columns=["start", "end", "text"])
+    start_time = 0
+    for file in tqdm(files, desc="Combining"):
+        if file.endswith(".csv"):
+            file_path = os.path.join(transcription_folder, file)
+            try:
+                df_local = pd.read_csv(file_path)
+            except:
+                audio_length = AudioSegment.from_file(os.path.join(clips_folder, file.replace(".csv", ".wav"))).duration_seconds
+                start_time += audio_length
+                print(f"{file_path} is empty. Skipping...")
+                continue
+            print(file_path)
+            df_local.sort_values(by=["start"], inplace=True)
+            end = df_local["end"].iloc[-1]
+            df_local["start"] += start_time
+            df_local["end"] += start_time
+            start_time += end
+            df_combined = pd.concat([df_combined, df_local], ignore_index=True)
+    # Sort by timestamp
+    df_combined.sort_values(by=["start"], inplace=True)
+    # Convert to int
+    df_combined["start"] = df_combined["start"].astype(int)
+    df_combined["end"] = df_combined["end"].astype(int)
+    # Remove empty rows
+    df_combined = df_combined[pd.notnull(df_combined["text"])].reset_index(drop=True)
+    # Remove leading and trailing double quotes, csv will still have them b/c of special characters
+    df_combined["text"] = df_combined["text"].str.strip()
+    df_combined["text"] = df_combined["text"].str.replace('"', "")
+    transcription_folder = os.path.join(transcription_folder, "../")
+    df_combined.to_csv(os.path.join(transcription_folder, "full_transcription.csv"), index=False)
+
+def combine_twitch_chat_with_streamer_transcription(streamer_full_transcription_file, twitch_chat_file, output_file, streamer_name, time_offset=0):
+    df_streamer = pd.read_csv(streamer_full_transcription_file)
+    df_streamer["user_name"] = streamer_name
+    df_streamer["start"] += time_offset
+    df_streamer.drop(columns=["end"], inplace=True)
+
+    df_twitch = pd.read_csv(twitch_chat_file, on_bad_lines="skip")
+    df_twitch.rename(columns={"time": "start", "message": "text"}, inplace=True)
+    df_twitch.drop(columns=["user_color"], inplace=True)
+
+    df_combined = pd.concat([df_streamer, df_twitch], ignore_index=True)
+    df_combined.sort_values(by=["start"], inplace=True)
+    df_combined["text"] = "[" + df_combined["user_name"] + "]: " + df_combined["text"]
+    tokenizer = DeciLM7b.get_tokenizer()
+    df_combined["tokens"] = df_combined["text"].apply(lambda x: tokenizer.encode(str(x), return_tensors="pt").shape[1])
+    print(f"Total tokens: {df_combined['tokens'].sum()}")
+    df_combined.to_csv(output_file, index=False)
+
+def batch_rows_by_token_count(combined_transcription_file, max_tokens=4096):
+    df = pd.read_csv(combined_transcription_file)
+    batches = []
+    current_batch = []
+    current_sum = 0
+    for index, row in df.iterrows():
+        if current_sum + row["tokens"] > max_tokens:
+            cur_df = pd.DataFrame(current_batch)
+            print(f"Batch {len(batches)}: {cur_df['tokens'].sum()}")
+            batches.append(cur_df)
+            current_batch = [row]
+            current_sum = row["tokens"]
+        else:
+            current_batch.append(row)
+            current_sum += row["tokens"]
+    if current_batch:
+        batches.append(pd.DataFrame(current_batch))
+    print(f"Total batches: {len(batches)}")
+    return batches
+
+def chat_template_for_batches(combined_transcription_file, streamer_name, chat_dataset_file, max_tokens):
+    batches = batch_rows_by_token_count(combined_transcription_file, max_tokens)
+    response_template = lambda x: f"\n### Response:\n{x.strip()}" 
+    input_template = lambda x: f"\n### Input:\n{x.strip()}" 
+    chat_dataset = []
+    for batch in batches:
+        current_chat = []
+        in_input = False
+        for index, row in batch.iterrows():
+            text = str(row["text"])
+            if row["user_name"] == streamer_name:
+                current_chat.append(response_template(text))
+                in_input = False
+            elif in_input:
+                current_chat.append("\n" + text)
+            else:
+                current_chat.append(input_template(text))
+                in_input = True
+        chat_dataset.append("".join(current_chat))
+    df = pd.DataFrame(chat_dataset, columns=["chat"])
+    df.to_csv(chat_dataset_file, index=False)
+        
 if __name__ == "__main__":
     # prepare_audio("data/XL/")
     # isolate_voice("data/Toma/")
     # isolate_voice("data/XL/")
     # transcribe_voice("data/XL/")
     # batch_clips("data/Toma/resampled_audio/", "data/Toma/clips/")
-    transcribe_voice("data/Toma/clips/", "data/Toma/transcriptions/")
+    # transcribe_voice("data/Toma/clips/", "data/Toma/transcriptions/")
+    # combine_transcriptions_csv("data/Toma/transcriptions/", "data/Toma/clips/")
+    # combine_twitch_chat_with_streamer_transcription("data/Toma/full_transcription.csv", "data/Toma/twitch-chat-2025248149.csv", "data/Toma/combined_transcription.csv", "toma", 60)
+    # chat_template_for_batches("data/Toma/combined_transcription.csv", "toma", "data/Toma/chat_dataset.csv", max_tokens=3000)
     pass
