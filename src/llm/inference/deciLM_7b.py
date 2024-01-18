@@ -1,6 +1,6 @@
 import os
 import string
-from llm import LanguageModel
+from src.llm import LanguageModel
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 
 class DeciLM7b(LanguageModel):
-    def __init__(self, quantize=False):
+    def __init__(self, quantize=True):
         super().__init__()
         self.model_name = "Deci/DeciLM-7B-instruct"  # "Deci/DeciLM-7B"
 
@@ -57,7 +57,7 @@ class DeciLM7b(LanguageModel):
         full_prompt = "\n".join([system_prompt, "".join(history), user_prompt, assistant_prompt])
         return full_prompt, system_prompt
 
-    def think(self, prompt, history, max_new_tokens=4096, temperature=0.7, top_p=0.95, **kwargs):
+    def think(self, prompt, history="", max_new_tokens=4096, temperature=0.7, top_p=0.95, **kwargs):
         self.generator = pipeline(
             "text-generation",
             model=self.model,
@@ -69,6 +69,24 @@ class DeciLM7b(LanguageModel):
             return_full_text=False,
         )
         full_prompt, system_prompt = self.__prompt(prompt, history)
+        response = self.generator(full_prompt)[0]["generated_text"]
+        return response.replace(system_prompt, "")
+
+    def sentence_completion(self, prompt, max_new_tokens=4096, temperature=0.9, top_p=0.95, **kwargs):
+        self.generator = pipeline(
+            "text-generation",
+            model=self.model,
+            tokenizer=self.tokenizer,
+            temperature=temperature,
+            top_p=top_p,
+            max_length=max_new_tokens,
+            do_sample=True,
+            return_full_text=False,
+        )
+        system_prompt = "### System:\n You are a helpful AI Assistant that helps as much as possible. Follow instructions as closest as possible."
+        input_prompt = "### Input:\n " + prompt
+        response_prompt = "### Response:\n "
+        full_prompt = "\n".join([system_prompt, input_prompt, response_prompt])
         response = self.generator(full_prompt)[0]["generated_text"]
         return response.replace(system_prompt, "")
 

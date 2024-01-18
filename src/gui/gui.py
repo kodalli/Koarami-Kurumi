@@ -9,6 +9,11 @@ from tkinter import simpledialog, messagebox
 import threading
 import websocket
 import pyaudio
+import discord
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GUI:
@@ -24,6 +29,47 @@ class GUI:
 
         self.playback_thread = threading.Thread(target=self.receive_and_play, daemon=True)
         self.playback_thread.start()
+
+    async def poll_voice_ws(self, reconnect: bool) -> None:
+        backoff = discord.backoff.ExponentialBackoff()
+        while True:
+            try:
+                await self.ws.poll_event()
+            except (discord.errors.ConnectionClosed, asyncio.TimeoutError) as exc:
+                if isinstance(exc, discord.errors.ConnectionClosed):
+                    # The following close codes are undocumented so I will document them here.
+                    # 1000 - normal closure (obviously)
+                    # 4014 - voice channel has been deleted.
+                    # 4015 - voice server has crashed
+                    if exc.code in (1000, 4015):
+                        logger.info('Disconnecting from voice normally, close code %d.', exc.code)
+                        await self.disconnect()
+                        break
+                    if exc.code == 4014:
+                        logger.info('Disconnected from voice by force... potentially reconnecting.')
+                        successful = await self.potential_reconnect()
+                        if not successful:
+                            logger.info('Reconnect was unsuccessful, disconnecting from voice normally...')
+                            await self.disconnect()
+                            break
+                        else:
+                            continue
+
+                if not reconnect:
+                    await self.disconnect()
+                    raise
+
+                retry = backoff.delay()
+                logger.exception('Disconnected from voice... Reconnecting in %.2fs.', retry)
+                self._connected.clear()
+                await asyncio.sleep(retry)
+                await self.voice_disconnect()
+                try:
+                    await self.connect(reconnect=True, timeout=self.timeout)
+                except asyncio.TimeoutError:
+                    # at this point we've retried 5 times... let's continue the loop.
+                    logger.warning('Could not connect to voice... Retrying...')
+                    continue 
 
     def record_and_send(self):
         recorder = sr.Recognizer()

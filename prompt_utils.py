@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+import itertools
 import random
 import re
 from llm.inference.deciLM_7b import DeciLM7b
@@ -211,6 +213,32 @@ def read_description_file(path):
         # tokenized_text = DeciLM7b.get_tokenizer().encode(text, return_tensors="pt")
         # print(tokenized_text.shape)
         return text
+
+def starling_template(question, answer):
+    instruct_data = f"GPT4 Correct User: {question}<|end_of_turn|>GPT4 Correct Assistant: {answer}"
+    return instruct_data
+
+def build_prompts_from_qa_txt(text_file, template_func):
+    def process_block(block):
+        questions = []
+        answers = []
+        for line in block:
+            if line.startswith('Q:'):
+                questions.append(line[2:].strip())
+            elif line.startswith('A:'):
+                answers.append(line[2:].strip())
+        return (template_func(q, a) for q in questions for a in answers)
+
+    with open(text_file) as f:
+        text = f.read()
+
+    blocks = text.split('\n\n')
+    with ThreadPoolExecutor() as executor:
+        results = executor.map(process_block, blocks)
+
+    dataset = list(itertools.chain.from_iterable(results))
+    return dataset
+
 
 if __name__ == '__main__':
     # out = create_sys_info({"persona": {"<STREAMER>": "An AI streamer named Koarami Kurumi", "<VIEWER>": "Viewers of the Twitch Stream"}, "scenario": "A streamer interacts with Twitch Chat with playful banter."})
