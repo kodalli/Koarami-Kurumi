@@ -3,9 +3,12 @@ import io
 import queue
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Dict, Optional, Union
 import discord
 from discord.ext import listening
+from discord.ext.listening import AudioFrame
+from discord.ext.listening.sink import OpusDecoder
+from discord.ext.listening.sink import SILENT_FRAME
 import asyncio
 import os
 import librosa
@@ -43,12 +46,7 @@ class AudioBuffer:
         self.client = client
         self.audio_threshold = 300
 
-    def is_silence(self, audio_data) -> bool:
-        rms_value = np.sqrt(np.mean(np.square(audio_data)))
-        print(f"RMS: {rms_value}")
-        return rms_value < self.audio_threshold
-
-    def on_audio(self, frame: listening.AudioFrame) -> None:
+    def on_audio(self, frame: AudioFrame) -> None:
         """
         Parameters
         ----------
@@ -63,43 +61,80 @@ class AudioBuffer:
         self._write_frame(frame)
         self._clean_lock.release()
 
-    def _write_frame(self, frame: listening.AudioFrame) -> None:
-        # When the bot joins a vc and starts listening and a user speaks for the first time,
-        # the timestamp encompasses all that silence, including silence before the bot even
-        # joined the vc. It goes in a pattern that the 6th packet has a 11 sequence skip, so
-        # this last part of the if statement gets rid of that silence.
-        if self._last_timestamp is not None and not (self._packet_count == 6 and frame.sequence - self._last_sequence == 11):  # type: ignore
-            silence = frame.timestamp - self._last_timestamp - listening.sink.OpusDecoder.SAMPLES_PER_FRAME
-            if silence > 0:
-                self.buffer.write(b"\x00" * silence * listening.sink.OpusDecoder.SAMPLE_SIZE)
+    def _is_silence(self, audio_data) -> bool:
+        rms_value = np.sqrt(np.mean(np.square(audio_data)))
+        print(f"RMS: {rms_value}")
+        return rms_value < self.audio_threshold
 
-        if frame.audio != listening.sink.SILENT_FRAME:
+    def _write_frame(self, frame: AudioFrame) -> None:
+        self._handle_silence(frame)
+        self._add_audio_to_buffer(frame)
+        self._process_audio_if_needed()
+        self._update_frame_metadata(frame)
+
+    def _handle_silence(self, frame: AudioFrame) -> None:
+        if self._should_insert_silence(frame):
+            silence_duration = self._calculate_silence_duration(frame)
+            self.buffer.write(b"\x00" * silence_duration)
+
+    def _should_insert_silence(self, frame: AudioFrame) -> bool:
+        return self._last_timestamp is not None and not (self._packet_count == 6 and frame.sequence - self._last_sequence == 11)
+
+    def _calculate_silence_duration(self, frame: AudioFrame) -> int:
+        return max(0, frame.timestamp - self._last_timestamp - OpusDecoder.SAMPLES_PER_FRAME) * OpusDecoder.SAMPLE_SIZE
+
+    def _add_audio_to_buffer(self, frame: AudioFrame) -> None:
+        if frame.audio != SILENT_FRAME:
             self.buffer.write(frame.audio)
 
+    def _process_audio_if_needed(self) -> None:
         now = datetime.utcnow()
-        if  now - self.phrase_time > timedelta(seconds=3):
-            raw_bytes = self.buffer.getvalue()
-            print(len(raw_bytes))
-            audio_np = np.frombuffer(raw_bytes, dtype=np.int16)
-            audio_mono_np = audio_np.reshape((-1, listening.sink.OpusDecoder.CHANNELS)).mean(axis=1)
-            audio_mono_resampled_np = resampy.resample(audio_mono_np, listening.sink.OpusDecoder.SAMPLING_RATE, 16000)
-            if not self.is_silence(audio_mono_resampled_np):
-                question = self.client.stt_engine.hear(audio_mono_resampled_np)
-                if question.strip() != "":
-                    print(f"Q: {question}")
-                    response = self.client.llm_engine.think(question, max_new_tokens=4096)
-                    if response.strip() != "":
-                        print(f"A: {response}")
-                        self.client.text = response
-                        asyncio.run(self.client.voice_send())
-
-            self.buffer.seek(0)
-            self.buffer.truncate(0)
+        if now - self.phrase_time > timedelta(seconds=3) and self.buffer.tell() > 0:
+            self._process_audio()
             self.phrase_time = now
-            
+
+    def _process_audio(self) -> None:
+        raw_bytes = self.buffer.getvalue()
+        audio_mono_resampled_np = self._prepare_audio_data(raw_bytes)
+        if self._is_significant_audio(audio_mono_resampled_np):
+            self._handle_significant_audio(audio_mono_resampled_np)
+
+        self.buffer.seek(0)
+        self.buffer.truncate(0)
+
+    def _prepare_audio_data(self, raw_bytes: bytes) -> np.ndarray:
+        audio_np = np.frombuffer(raw_bytes, dtype=np.int16)
+        audio_mono_np = audio_np.reshape((-1, OpusDecoder.CHANNELS)).mean(axis=1)
+        return resampy.resample(audio_mono_np, OpusDecoder.SAMPLING_RATE, 16000)
+
+    def _is_significant_audio(self, audio_data: np.ndarray) -> bool:
+        return not self._is_silence(audio_data)
+
+    def _handle_significant_audio(self, audio_data: np.ndarray) -> None:
+        question = self.client.stt_engine.hear(audio_data)
+        if question.strip():
+            self._process_question(question)
+
+    def _process_question(self, question: str) -> None:
+        print(f"Q: {question}")
+        response = self.client.llm_engine.think(question, max_new_tokens=4096)
+        if response.strip():
+            print(f"A: {response}")
+            self.client.text = response
+            asyncio.run(self.client.voice_send())
+
+    def _update_frame_metadata(self, frame: AudioFrame) -> None:
         self._last_timestamp = frame.timestamp
         self._last_sequence = frame.sequence
-        # self._cache_user(frame.user)
+        self._cache_user(frame.user)
+
+    def _cache_user(self, user: Optional[Union[discord.Member, discord.Object]]) -> None:
+        if user is None:
+            return
+        if self.user is None:
+            self.user = user
+        elif type(self.user) == int and isinstance(user, discord.Object):
+            self.user = user
 
     def cleanup(self) -> None:
         """Writes remaining frames in buffer to file and then closes it."""
@@ -115,19 +150,19 @@ class AudioHandler(listening.AudioHandlingSink):
 
     VALIDATION_WAIT_TIMEOUT = 1
 
-    def __init__(self, message: discord.Message, client):
+    def __init__(self, client):
         super().__init__()
-        self.message = message
         self._clean_lock: threading.Lock = threading.Lock()
-        self.buffer = AudioBuffer(client)
+        self.client = client
+        self.buffers: Dict[int, AudioBuffer] = {}
         self.done: bool = False
     
     def on_valid_audio(self, frame: listening.AudioFrame):
         self._clean_lock.acquire()
-
         # frame.ssrc is the speaker, multiple speakers can be in a channel
-        # print(f"Member: {frame.user}")
-        self.buffer.on_audio(frame)
+        if frame.ssrc not in self.buffers:
+            self.buffers[frame.ssrc] = AudioBuffer(self.client)
+        self.buffers[frame.ssrc].on_audio(frame)
         self._clean_lock.release()
 
     def on_rtcp(self, packet: listening.RTCPPacket) -> None:
@@ -166,8 +201,9 @@ class Client(discord.Client):
         super().__init__(intents=intents)
 
         self.token = os.getenv("DISCORD_TOKEN")
-        self.guild = os.getenv("DISCORD_GUILD")
-        self.channel = os.getenv("DISCORD_CHANNEL")
+        self.guild_id = os.getenv("DISCORD_GUILD")
+        self.text_channel_id = os.getenv("DISCORD_TEXT_CHANNEL")
+        self.voice_channel_id = os.getenv("DISCORD_VOICE_CHANNEL")
         self.base_dir = os.getenv("BASE_DIRECTORY")
 
         name = "en_US-kathleen-low.onnx"
@@ -204,29 +240,16 @@ class Client(discord.Client):
     # The key word arguments passed in the listen function MUST have the same name.
     # You could alternatively do on_listen_finish(sink, exc, channel, ...) because exc is always passed
     # regardless of if it's None or not.
-    async def on_listen_finish(self, sink: listening.AudioFileSink, exc=None, channel=None, message=None):
-        # Convert the raw recorded audio to its chosen file type
-        # and wait for it to finish.
-        sink.convert_files()
-        await sink.wait_for_convert()
-        if channel is not None:
-            for file in sink.output_files.values():
-                await self.send_audio_file(channel, file)
-
-        audio_data = None
-        for file in os.listdir("./"):
-            if file.endswith(".wav"):
-                audio_data = librosa.load(file, sr=16000, mono=True)[0].tobytes() 
-                break
-        text = self.stt_engine.hear(audio_data)
-        await message.channel.send(text)
-
+    async def on_listen_finish(self, sink: listening.AudioFileSink, exc=None, channel=None):
         # Raise any exceptions that may have occurred
         if exc is not None:
             raise exc
 
     async def on_ready(self):
         logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        channel_id = 409214150489931800
+        self.vc = await self.get_channel(channel_id).connect(cls=listening.VoiceClient)
+        await self.start_listening()
     
     async def join(self, message: discord.Message):
         voice = message.author.voice
@@ -244,15 +267,16 @@ class Client(discord.Client):
             await message.channel.send("Failed to initialize the listening voice client!") 
             return
 
-        await self.start_listening(message)
+        await self.start_listening()
 
         
-    async def start_listening(self, message: discord.Message):
-        sink = AudioHandler(message, self)
-        self.vc.listen(sink, process_pool, after=self.on_listen_finish, message=message)
-        await message.channel.send(f"Connected to {message.author.voice.channel} and started listenging!")
+    async def start_listening(self):
+        sink = AudioHandler(self)
+        self.vc.listen(sink, process_pool, after=self.on_listen_finish)
+        channel = self.get_channel(int(self.text_channel_id))
+        await channel.send(f"Connected to {self.vc.channel} and started listenging!")
 
-    async def stop_listening(self, message: discord.Message):
+    async def stop_listening(self):
         self.vc.stop_listening() 
 
     async def on_message(self, message):
@@ -266,7 +290,7 @@ class Client(discord.Client):
         
         if message.content.startswith("!stop"):
             if self.vc:
-                await self.stop_listening(message)
+                await self.stop_listening()
 
         if message.content.startswith("!start"):
             if self.vc:
@@ -286,9 +310,12 @@ class Client(discord.Client):
             buffer = io.BytesIO()
             for mono_chunk in mono_generator:
                 buffer.write(mono_chunk)
+            if buffer.tell() == 0:
+                print("No audio to send")
+                return
             buffer.seek(0)
             mono_audio = AudioSegment.from_file(buffer, format="raw", frame_rate=self.tts_engine.sample_rate(), channels=1, sample_width=2)
-            stereo_audio = mono_audio.set_frame_rate(48000).set_channels(2)
+            stereo_audio = mono_audio.set_frame_rate(OpusDecoder.SAMPLING_RATE).set_channels(OpusDecoder.CHANNELS)
             stereo_buffer = io.BytesIO()
             stereo_audio.export(stereo_buffer, format="raw")
             stereo_buffer.seek(0)
