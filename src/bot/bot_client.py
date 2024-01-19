@@ -20,7 +20,7 @@ import numpy as np
 import logging
 import dotenv
 from src.tts.piper_tts import PiperTTS
-from src.stt.whisper_stt import WhisperSTT
+from src.stt.whisper_stt import FasterWhisperSTT, WhisperSTT
 from src.stt.stt import SpeechToText
 from src.llm.inference.deciLM_7b import DeciLM7b
 
@@ -63,7 +63,7 @@ class AudioBuffer:
 
     def _is_silence(self, audio_data) -> bool:
         rms_value = np.sqrt(np.mean(np.square(audio_data)))
-        print(f"RMS: {rms_value}")
+        logger.info(f"RMS: {rms_value}")
         return rms_value < self.audio_threshold
 
     def _write_frame(self, frame: AudioFrame) -> None:
@@ -112,14 +112,15 @@ class AudioBuffer:
 
     def _handle_significant_audio(self, audio_data: np.ndarray) -> None:
         question = self.client.stt_engine.hear(audio_data)
+        logger.info(question)
         if question.strip():
             self._process_question(question)
 
     def _process_question(self, question: str) -> None:
-        print(f"Q: {question}")
+        logger.info(f"Q: {question}")
         response = self.client.llm_engine.think(question, max_new_tokens=4096)
         if response.strip():
-            print(f"A: {response}")
+            logger.info(f"A: {response}")
             self.client.text = response
             asyncio.run(self.client.voice_send())
 
@@ -209,14 +210,12 @@ class Client(discord.Client):
         name = "en_US-kathleen-low.onnx"
         self.tts_engine = PiperTTS(model_path=f"{self.base_dir}/src/tts/models/piper/{name}", config_path=f"{self.base_dir}/src/tts/models/piper/{name}.json")
         self.llm_engine = DeciLM7b()
-        self.stt_engine = WhisperSTT()
+        self.stt_engine = FasterWhisperSTT()
         self.text = None
         self.vc = None
 
         if not discord.opus.is_loaded():
             discord.opus.load_opus("libopus.so.0")
-
-        self.stt_engine = WhisperSTT()
 
     async def send_audio_file(self, channel: discord.TextChannel, file: listening.AudioFile):
         # Get the user id of this audio file's user if possible
@@ -300,7 +299,7 @@ class Client(discord.Client):
             await self.join(message)
 
         if message.content.startswith("!tts"):
-            print(message.content)
+            logger.info(message.content)
             self.text = message.content[4:]
             await self.voice_send()
 
@@ -311,7 +310,7 @@ class Client(discord.Client):
             for mono_chunk in mono_generator:
                 buffer.write(mono_chunk)
             if buffer.tell() == 0:
-                print("No audio to send")
+                logger.info("No audio to send")
                 return
             buffer.seek(0)
             mono_audio = AudioSegment.from_file(buffer, format="raw", frame_rate=self.tts_engine.sample_rate(), channels=1, sample_width=2)

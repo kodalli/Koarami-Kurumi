@@ -12,7 +12,7 @@ import pkg_resources
 import logging
 
 from multiprocessing import cpu_count
-from vc_infer_pipeline import VC
+from lib.vc.modules import VC
 from lib.infer_pack.models import SynthesizerTrnMs256NSFsid, SynthesizerTrnMs256NSFsid_nono, SynthesizerTrnMs768NSFsid, SynthesizerTrnMs768NSFsid_nono
 from lib.audio import load_audio
 

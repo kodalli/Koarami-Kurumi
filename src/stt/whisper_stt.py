@@ -5,7 +5,9 @@ import torch
 from src.stt import SpeechToText
 import librosa
 from typing import Iterable, Union
+import logging
 
+logger = logging.getLogger(__name__)
 
 class WhisperSTT(SpeechToText):
     def __init__(self, model_name="medium.en"):
@@ -31,7 +33,8 @@ class WhisperSTT(SpeechToText):
         return text
 
 class FasterWhisperSTT(SpeechToText):
-    def __init__(self, model_name="large-v3"):
+    def __init__(self, model_name="base.en"):
+        # large-v3
         # Run on GPU with FP16
         self.model = WhisperModel(model_name, device="cuda" if torch.cuda.is_available() else "cpu", compute_type="float16")
 
@@ -40,14 +43,14 @@ class FasterWhisperSTT(SpeechToText):
         # or run on CPU with INT8
         # model = WhisperModel(model_size, device="cpu", compute_type="int8")
 
-    def hear(self, audio: Union[bytes, np.array]) -> str:
-        return "".join(self.model.transcribe(audio))
+    def hear(self, audio: np.array) -> str:
+        return "".join(self.transcribe(audio))
     
     def transcribe(self, audio: np.array) -> Iterable[str]:
-        segments, info = self.model.transcribe(audio, beam_size=5)
+        segments, info = self.model.transcribe(audio.astype(np.float32) / 32768.0, vad_filter=True)
 
-        print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
+        logger.info("Detected language '%s' with probability %f" % (info.language, info.language_probability))
 
         for segment in segments:
-            # print("[%.2fs -> %.2fs] %s" % (segment.start, segment.end, segment.text))
             yield segment.text
+
