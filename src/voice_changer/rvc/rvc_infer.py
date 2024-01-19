@@ -12,9 +12,9 @@ import pkg_resources
 import logging
 
 from multiprocessing import cpu_count
-from lib.vc.modules import VC
-from lib.infer_pack.models import SynthesizerTrnMs256NSFsid, SynthesizerTrnMs256NSFsid_nono, SynthesizerTrnMs768NSFsid, SynthesizerTrnMs768NSFsid_nono
-from lib.audio import load_audio
+from core.vc.modules import VC
+from core.infer_pack.models import SynthesizerTrnMs256NSFsid, SynthesizerTrnMs256NSFsid_nono, SynthesizerTrnMs768NSFsid, SynthesizerTrnMs768NSFsid_nono
+from core.audio import load_audio
 
 from fairseq import checkpoint_utils
 from scipy.io import wavfile
@@ -140,7 +140,7 @@ def load_hubert(file_path="hubert_base.pt"):
 
 def vc_single(
     sid,
-    input_audio_path,
+    input_audio,
     f0_up_key,
     f0_file,
     f0_method,
@@ -155,10 +155,14 @@ def vc_single(
 ):  # spk_item, input_audio0, vc_transform0,f0_file,f0method0
     global tgt_sr, net_g, vc, hubert_model, version
     f0_file = None
-    if input_audio_path is None:
+    if input_audio is None:
         return "You need to upload an audio", None
+    if not isinstance(input_audio, np.ndarray):
+        audio = load_audio(input_audio, 16000)
+    else:
+        # Should be 16khz
+        audio = input_audio
     f0_up_key = int(f0_up_key)
-    audio = load_audio(input_audio_path, 16000)
     audio_max = np.abs(audio).max() / 0.95
     if audio_max > 1:
         audio /= audio_max
@@ -186,7 +190,7 @@ def vc_single(
         net_g,
         sid,
         audio,
-        input_audio_path,
+        input_audio,
         times,
         f0_up_key,
         f0_method,
@@ -327,9 +331,75 @@ def rvc_convert(model_path,
 
     return output_file_path
 
+def rvc_convert_raw(model_path,
+            f0_up_key=0,
+            input_audio:np.ndarray=None, 
+            _is_half="False",
+            f0method="rmvpe",
+            file_index="",
+            file_index2="",
+            index_rate=1,
+            filter_radius=3,
+            resample_sr=0,
+            rms_mix_rate=0.5,
+            protect=0.33,
+            verbose=False
+          ):  
+    '''
+    Function to call for the rvc voice conversion.  All parameters are the same present in that of the webui
+
+    Args: 
+        model_path (str) : path to the rvc voice model you're using
+        f0_up_key (int) : transpose of the audio file, changes pitch (positive makes voice higher pitch)
+        _is_half (str) : Determines half-precision
+        f0method (str) : picks which f0 method to use: dio, harvest, crepe, rmvpe (requires rmvpe.pt)
+        file_index (str) : path to file_index, defaults to None
+        file_index2 (str) : path to file_index2, defaults to None.  #honestly don't know what this is for
+        index_rate (int) : strength of the index file if provided
+        filter_radius (int) : if >=3: apply median filtering to the harvested pitch results. The value represents the filter radius and can reduce breathiness.
+        resample_sr (int) : quality at which to resample audio to, defaults to no resample
+        rmx_mix_rate (int) : adjust the volume envelope scaling. Closer to 0, the more it mimicks the volume of the original vocals. Can help mask noise and make volume sound more natural when set relatively low. Closer to 1 will be more of a consistently loud volume
+        protect (int) : protect voiceless consonants and breath sounds to prevent artifacts such as tearing in electronic music. Set to 0.5 to disable. Decrease the value to increase protection, but it may reduce indexing accuracy
+
+    Returns:
+        raw_audio_output (np.array) : raw audio output
+
+    '''
+    global config, now_dir, hubert_model, tgt_sr, net_g, vc, cpt, device, is_half, version
+    
+    if torch.cuda.is_available():
+        device = "cuda:0"
+    elif torch.backends.mps.is_available():
+        device = "mps:0"
+    else:
+        print("Cuda or MPS not detected")
+
+    if not verbose:
+        logging.getLogger('fairseq').setLevel(logging.ERROR)
+        logging.getLogger('rvc').setLevel(logging.ERROR)
+
+    is_half = _is_half
+
+    if(is_half.lower() == 'true'):
+        is_half = True
+    else:
+        is_half = False
+
+    config=Config(device,is_half)
+    now_dir=os.getcwd()
+    sys.path.append(now_dir)
+
+    hubert_model=None
+
+    get_vc(model_path)
+    wav_opt=vc_single(0,input_audio,f0_up_key,None,f0method,file_index,file_index2,index_rate,filter_radius,resample_sr,rms_mix_rate,protect)
+
+    return wav_opt
+    
+
 def main():
     # Need to comment out yaml setting for input audio
-    rvc_convert(model_path="models\\ado.pth", input_path="delilah.wav")
+    rvc_convert(model_path="models\\ado.pth", input_path="delilah.wav", resample_sr=32000) # discord is 32khz so try this for now
 
 if __name__ == "__main__":
     main()
